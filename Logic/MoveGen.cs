@@ -28,6 +28,10 @@ namespace ChessBot.Logic
                 }
                 Pieces &= ~Square;
             }
+            if (Movelist.Count == 0)
+            {
+                return Movelist;
+            }
             Movelist = ValidateMoves(Movelist, Colour, Colour == 'W'? WhiteKing : BlackKing);
             return Movelist;
         }
@@ -221,7 +225,7 @@ namespace ChessBot.Logic
             ulong King = Colour == 'W' ? BlackKing : WhiteKing;
             List<ulong> PieceChecks = new List<ulong> { Queens | Rooks, Queens | Bishops, Knights, Pawns, King };
             List<List<Move>> MoveChecks = new List<List<Move>> { HorizontalMoves, DiagonalMoves, KnightMoves, PawnMoves, KingMoves };
-            for (int i = 0; i < 4; i++)
+            for (int i = 0; i < 5; i++)
             {
                 if (MoveChecks[i].Any(m => (m.toSquare & PieceChecks[i]) != 0))
                 {
@@ -234,18 +238,32 @@ namespace ChessBot.Logic
         public static List<Move> ValidateMoves(List<Move> Movelist, char Colour, ulong King)
         {
             //var watch = System.Diagnostics.Stopwatch.StartNew();
+            bool kingCaptured = Movelist.Any(m => m.capturedPiece == 'K' || m.capturedPiece == 'k');
+            if (kingCaptured)
+            {
+                Console.WriteLine("aAa");
+                kingCaptured = false;
+            }
             int dex = Movelist.Count-1;
             bool isWhite = Colour == 'W' ? true : false; 
+            byte savedCastlingRights = GetCastlingRights();
             while (true)
             {
                 Move ActiveMove = Movelist[dex];
-                HandleMove(ActiveMove, isWhite);
+                HandleMove(ActiveMove, isWhite, false, false);
                 if (IsInCheck(Colour, Colour == 'W' ? WhiteKing : BlackKing))
                 {
                     Movelist.Remove(Movelist[dex]);
                 }
                 RevertMove(ActiveMove, isWhite);
+                SetCastlingRights(savedCastlingRights);
                 dex--;
+                kingCaptured = Movelist.Any(m => m.capturedPiece == 'K' || m.capturedPiece == 'k');
+                if (kingCaptured)
+                {
+                    Console.WriteLine("aAa");
+                    kingCaptured = false;
+                }
                 if (dex < 0)
                 {
                     break;

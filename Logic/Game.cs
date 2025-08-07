@@ -29,6 +29,8 @@ namespace ChessBot.Logic
         public static int Turn = 0;
         public static ulong TempEnPassant = 0UL;
 
+        public static bool MoveRandomness = true;
+        public static bool BotStart = false;
         public static bool HumanisWhite = true;
         public static bool HumanColour = HumanisWhite;
         public static bool BotColour = !HumanColour;
@@ -58,22 +60,41 @@ namespace ChessBot.Logic
             CapturePromotion = 1 << 6
         }
 
+        public static byte GetCastlingRights()
+        {
+            byte rights = 0;
+            if (WhiteRightSideCastle) rights |= 1 << 0;
+            if (WhiteLeftSideCastle)  rights |= 1 << 1;
+            if (BlackRightSideCastle) rights |= 1 << 2;
+            if (BlackLeftSideCastle)  rights |= 1 << 3;
+            return rights;
+        }
+
+        public static void SetCastlingRights(byte rights)
+        {
+            WhiteRightSideCastle = (rights & (1 << 0)) != 0;
+            WhiteLeftSideCastle  = (rights & (1 << 1)) != 0;
+            CheckRooks();
+            BlackRightSideCastle = (rights & (1 << 2)) != 0;
+            BlackLeftSideCastle  = (rights & (1 << 3)) != 0;
+        }
+
         public static void StartGame()
         {
             SetBitboards();
-            //BotMove(!BotColour);
+            if(BotStart) BotMove(BotColour);
         }
 
         public static async void ValidateHumanMove(ulong fromTile, ulong toTile)
         {
-            List<Move> Movelist = GenerateValidMoves(HumanColour);
+            List<Move> Movelist = GenerateValidMoves(Turn%2==0);
             if (Movelist.Count == 0) Console.WriteLine("Checkmate!!!");
             Move ActiveMove = Movelist.FirstOrDefault(m => m.fromSquare == fromTile && m.toSquare == toTile);
             if (!ActiveMove.Equals(default(Move)))
             {
                 TempEnPassant = 0UL;
-                if (ActiveMove.Piece == "King" || ActiveMove.Piece == "Rook") CheckCastleAvailability();
-                HandleMove(ActiveMove, HumanColour, true);
+                //if (ActiveMove.Piece == "King" || ActiveMove.Piece == "Rook") CheckCastleAvailability();
+                HandleMove(ActiveMove, Turn%2==0, true);
                 Turn++;
                 MainWindow mainWindow = (MainWindow)Application.Current.MainWindow;
                 mainWindow.ReDrawBoard();
@@ -82,57 +103,71 @@ namespace ChessBot.Logic
             }
         }
 
-        public static void BotMove(bool BotColour)
+        public static async void BotMove(bool BotColour)
         {
             //if (Turn < 20) HandleMove(GetBestMove(2), BotColour);
             //else if(Turn > 20 && Turn < 50)HandleMove(GetBestMove(3), BotColour);
-            Move move = GetBestMove(4, BotColour);
-            if (move.Piece == "King" || move.Piece == "Rook") CheckCastleAvailability();
-            HandleMove(move, BotColour);
-            Console.WriteLine(move.moveFlags);
-            Application.Current.Dispatcher.Invoke(() =>
+            Move move = GetBestMove(3, BotColour);
+            if (move.moveFlags != MoveFlags.None)
             {
-                MainWindow mainWindow = (MainWindow)Application.Current.MainWindow;
-                mainWindow.ReDrawBoard();
-            });
-            Console.WriteLine("Nodes: " + Nodes);
-            Nodes = 0;
-            //Console.WriteLine(MiniMax(4, true));
-            //MainWindow mainWindow = (MainWindow)Application.Current.MainWindow;
-            //mainWindow.ReDrawBoard();
-            Turn++;
-            //await Task.Delay(50);
-            //await Task.Run(() => BotMove(!BotColour));
+                HandleMove(move, BotColour, true);
+                Console.WriteLine(move.moveFlags);
+                Application.Current.Dispatcher.Invoke(() =>
+                {
+                    MainWindow mainWindow = (MainWindow)Application.Current.MainWindow;
+                    mainWindow.ReDrawBoard();
+                });
+                Console.WriteLine("Nodes: " + Nodes);
+                Nodes = 0;
+                Turn++;
+                await Task.Delay(50);
+                await Task.Run(() => BotMove(!BotColour));
+            }
         }
 
         public static Move GetBestMove(int depth, bool Colour)
         {
             float bestValue = float.NegativeInfinity;
             Move bestMove = default;
+            Move bestMove2 = default;
+            Move bestMove3 = default;
 
             List<Move> Movelist = GenerateValidMoves(Colour);
+            Stack<byte> castlingRightsStack = new();
+            ulong SavedTempEnPassant = TempEnPassant;
             if (Movelist.Count == 0) Console.WriteLine("Checkmate!!!");
 
             foreach (Move ActiveMove in Movelist)
             {
-                HandleMove(ActiveMove, Colour);
+                castlingRightsStack.Push(GetCastlingRights());
+                HandleMove(ActiveMove, Colour, true);
                 Turn++;
 
-                float value = MiniMax(depth - 1, false, float.NegativeInfinity, float.PositiveInfinity, !Colour);
+                float value = MiniMax(depth - 1, false, float.NegativeInfinity, float.PositiveInfinity, !Colour, castlingRightsStack);
 
                 RevertMove(ActiveMove, Colour);
+                TempEnPassant = SavedTempEnPassant;
+                SetCastlingRights(castlingRightsStack.Pop());
                 Turn--;
 
                 if (value > bestValue)
                 {
                     bestValue = value;
+                    bestMove3 = bestMove2;
+                    bestMove2 = bestMove;
                     bestMove = ActiveMove;
                 }
+            }
+            if (MoveRandomness && bestMove.fromSquare != 0 && bestMove2.fromSquare != 0 && bestMove3.fromSquare != 0)
+            {
+                Random rnd = new();
+                List<Move> RandomMoveList = new List<Move> { bestMove, bestMove2, bestMove3 };
+                bestMove = RandomMoveList[rnd.Next(RandomMoveList.Count)];
             }
             return bestMove;
         }
 
-        public static float MiniMax(int depth, bool isMax, float Alpha, float Beta, bool Colour)
+        public static float MiniMax(int depth, bool isMax, float Alpha, float Beta, bool Colour, Stack<byte> castlingRightsStack)
         {
             Nodes++;
             float value = isMax ? float.NegativeInfinity : float.PositiveInfinity;
@@ -156,12 +191,14 @@ namespace ChessBot.Logic
             foreach (Move ActiveMove in Movelist)
             {
                 CheckRooks();
-                HandleMove(ActiveMove, Colour);
+                castlingRightsStack.Push(GetCastlingRights());
+                HandleMove(ActiveMove, Colour, true);
                 Turn++;
 
-                float eval = MiniMax(depth - 1, !isMax, Alpha, Beta, !Colour);
+                float eval = MiniMax(depth - 1, !isMax, Alpha, Beta, !Colour, castlingRightsStack);
 
                 RevertMove(ActiveMove, Colour);
+                SetCastlingRights(castlingRightsStack.Pop());
                 Turn--;
 
                 if (isMax)
@@ -225,7 +262,7 @@ namespace ChessBot.Logic
         //    return maxScore;
         //}
 
-        public static void HandleMove(Move ActiveMove, bool isWhite, bool ChangeTempEnPassant = false)
+        public static void HandleMove(Move ActiveMove, bool isWhite, bool ChangeTempEnPassant = false, bool changeCastleRights = true)
         {
             CheckRooks();
             switch (ActiveMove.moveFlags)
@@ -233,6 +270,7 @@ namespace ChessBot.Logic
                 case MoveFlags.Normal:
                     {
                         UpdateBitBoard(ActiveMove.fromSquare, ActiveMove.toSquare, ActiveMove.Piece, isWhite);
+                        if (ChangeTempEnPassant) TempEnPassant = 0UL;
                         CheckRooks();
                         break;
                     }
@@ -240,21 +278,23 @@ namespace ChessBot.Logic
                     {
                         DestroyPiece(ActiveMove.toSquare, ActiveMove.capturedPiece);
                         UpdateBitBoard(ActiveMove.fromSquare, ActiveMove.toSquare, ActiveMove.Piece, isWhite);
+                        if (ChangeTempEnPassant) TempEnPassant = 0UL;
                         CheckRooks();
                         break;
                     }
                 case MoveFlags.EnPassant:
                     {
                         UpdateBitBoard(ActiveMove.fromSquare, ActiveMove.toSquare, ActiveMove.Piece, isWhite);
-                        //if (ChangeTempEnPassant) TempEnPassant = isWhite ? ActiveMove.toSquare >> 8 : ActiveMove.toSquare << 8;
+                        if (ChangeTempEnPassant) TempEnPassant = isWhite ? ActiveMove.toSquare >> 8 : ActiveMove.toSquare << 8;
                         CheckRooks();
                         break;
                     }
                 case MoveFlags.Promotion:
                     {
-                        UpdateBitBoard(ActiveMove.fromSquare, ActiveMove.toSquare, ActiveMove.Piece, isWhite);
-                        //DestroyPiece(ActiveMove.fromSquare, GetPieceAt(ActiveMove.fromSquare));
-                        //AddPiece(ActiveMove.toSquare, isWhite ? 'Q' : 'q');
+                        //UpdateBitBoard(ActiveMove.fromSquare, ActiveMove.toSquare, ActiveMove.Piece, isWhite);
+                        DestroyPiece(ActiveMove.fromSquare, GetPieceAt(ActiveMove.fromSquare));
+                        AddPiece(ActiveMove.toSquare, isWhite ? 'Q' : 'q');
+                        if (ChangeTempEnPassant) TempEnPassant = 0UL;
                         CheckRooks();
                         break;
                     }
@@ -264,6 +304,7 @@ namespace ChessBot.Logic
                         if ((ActiveMove.toSquare & 0x0000000000000004UL) != 0) UpdateCastle("WLSC");
                         if ((ActiveMove.toSquare & 0x0400000000000000UL) != 0) UpdateCastle("BLSC");
                         if ((ActiveMove.toSquare & 0x4000000000000000UL) != 0) UpdateCastle("BRSC");
+                        if (ChangeTempEnPassant) TempEnPassant = 0UL;
                         CheckRooks();
                         break;
                     }
@@ -271,19 +312,52 @@ namespace ChessBot.Logic
                     {
                         UpdateBitBoard(ActiveMove.fromSquare, ActiveMove.toSquare, ActiveMove.Piece, isWhite);
                         DestroyPiece(isWhite ? ActiveMove.toSquare >> 8 : ActiveMove.toSquare << 8, ActiveMove.capturedPiece);
+                        if (ChangeTempEnPassant) TempEnPassant = 0UL;
                         CheckRooks();
                         break;
                     }
                 case MoveFlags.CapturePromotion:
                     {
-                        UpdateBitBoard(ActiveMove.fromSquare, ActiveMove.toSquare, ActiveMove.Piece, isWhite);
+                        //UpdateBitBoard(ActiveMove.fromSquare, ActiveMove.toSquare, ActiveMove.Piece, isWhite);
                         DestroyPiece(ActiveMove.toSquare, ActiveMove.capturedPiece);
-                        //DestroyPiece(ActiveMove.fromSquare, GetPieceAt(ActiveMove.fromSquare));
-                        //AddPiece(ActiveMove.toSquare, isWhite ? 'Q' : 'q');
+                        if (ChangeTempEnPassant) TempEnPassant = 0UL;
+                        DestroyPiece(ActiveMove.fromSquare, GetPieceAt(ActiveMove.fromSquare));
+                        AddPiece(ActiveMove.toSquare, isWhite ? 'Q' : 'q');
                         CheckRooks();
                         break;
                     }
                 default: Console.WriteLine("No MoveFlags attached"); break;
+            }
+            if (changeCastleRights)
+            {
+                if (ActiveMove.Piece == "King")
+                {
+                    if (isWhite)
+                    {
+                        WhiteRightSideCastle = false;
+                        WhiteLeftSideCastle = false;
+                        CheckRooks();
+                    }
+                    else
+                    {
+                        BlackRightSideCastle = false;
+                        BlackLeftSideCastle = false;
+                    }
+                }
+                else if (ActiveMove.Piece == "Rook")
+                {
+                    if (isWhite)
+                    {
+                        if ((ActiveMove.fromSquare & WhiteRSC) != 0) WhiteRightSideCastle = false;
+                        if ((ActiveMove.fromSquare & WhiteLSC) != 0) WhiteLeftSideCastle = false;
+                        CheckRooks();
+                    }
+                    else
+                    {
+                        if ((ActiveMove.fromSquare & BlackRSC) != 0) BlackRightSideCastle = false;
+                        if ((ActiveMove.fromSquare & BlackLSC) != 0) BlackLeftSideCastle = false;
+                    }
+                }
             }
             CheckRooks();
         }
@@ -314,9 +388,9 @@ namespace ChessBot.Logic
                     }
                 case MoveFlags.Promotion:
                     {
-                        UpdateBitBoard(RevertedMove.toSquare, RevertedMove.fromSquare, RevertedMove.Piece, isWhite);
-                        //AddPiece(RevertedMove.fromSquare, GetPieceAt(RevertedMove.fromSquare));
-                        //DestroyPiece(RevertedMove.toSquare, isWhite ? 'Q' : 'q');
+                        //UpdateBitBoard(RevertedMove.toSquare, RevertedMove.fromSquare, RevertedMove.Piece, isWhite);
+                        AddPiece(RevertedMove.fromSquare, GetPieceAt(RevertedMove.fromSquare));
+                        DestroyPiece(RevertedMove.toSquare, isWhite ? 'Q' : 'q');
                         CheckRooks();
                         break;
                     }
@@ -338,10 +412,10 @@ namespace ChessBot.Logic
                     }
                 case MoveFlags.CapturePromotion:
                     {
-                        UpdateBitBoard(RevertedMove.toSquare, RevertedMove.fromSquare, RevertedMove.Piece, isWhite);
+                        //UpdateBitBoard(RevertedMove.toSquare, RevertedMove.fromSquare, RevertedMove.Piece, isWhite);
                         AddPiece(RevertedMove.toSquare, RevertedMove.capturedPiece);
-                        //AddPiece(RevertedMove.fromSquare, GetPieceAt(RevertedMove.fromSquare));
-                        //DestroyPiece(RevertedMove.toSquare, isWhite ? 'Q' : 'q');
+                        AddPiece(RevertedMove.fromSquare, GetPieceAt(RevertedMove.fromSquare));
+                        DestroyPiece(RevertedMove.toSquare, isWhite ? 'Q' : 'q');
                         CheckRooks();
                         break;
                     }
@@ -350,26 +424,16 @@ namespace ChessBot.Logic
             CheckRooks();
         }
 
-        public static void CheckCastleAvailability(string Reverse = "")
-        {
-            if ((WhiteRooks & WhiteRSC) == 0) WhiteRightSideCastle = false;
-            if ((WhiteRooks & WhiteLSC) == 0) WhiteLeftSideCastle = false;
-            if ((BlackRooks & BlackRSC) == 0) BlackRightSideCastle = false;
-            if ((BlackRooks & BlackLSC) == 0) BlackLeftSideCastle = false;
-            if ((WhiteKing & 0x0000000000000010UL) == 0) WhiteRightSideCastle = WhiteLeftSideCastle = false;
-            if ((BlackKing & 0x1000000000000000UL) == 0) BlackRightSideCastle = BlackLeftSideCastle = false;
-            if (Reverse != "")
-            {
-                switch (Reverse)
-                {
-                    case "WRSC": WhiteRightSideCastle = true;
-                    case "WLSC": WhiteLeftSideCastle = true;
-                    case "BRSC": BlackRightSideCastle = true;
-                    case "BLSC": BlackLeftSideCastle = true;
-                }
-            }
-            CheckRooks();
-        }
+        //public static void CheckCastleAvailability()
+        //{
+        //    if ((WhiteRooks & WhiteRSC) == 0) WhiteRightSideCastle = false;
+        //    if ((WhiteRooks & WhiteLSC) == 0) WhiteLeftSideCastle = false;
+        //    if ((BlackRooks & BlackRSC) == 0) BlackRightSideCastle = false;
+        //    if ((BlackRooks & BlackLSC) == 0) BlackLeftSideCastle = false;
+        //    if ((WhiteKing & 0x0000000000000010UL) == 0) WhiteRightSideCastle = WhiteLeftSideCastle = false;
+        //    if ((BlackKing & 0x1000000000000000UL) == 0) BlackRightSideCastle = BlackLeftSideCastle = false;
+        //    CheckRooks();
+        //}
 
         public static void SetBitboards()
         {

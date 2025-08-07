@@ -19,7 +19,6 @@ public partial class MainWindow : Window
         PrintTheThing();
         DrawBoard("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR");
         StartGame();
-        Console.WriteLine(((ulong)1 << 5) == 32);
     }
 
     private List<Button> Buttons = new List<Button>();
